@@ -1,0 +1,17 @@
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+# have cargo run flash the board
+runner = "elf2uf2-rs -d"
+
+rustflags = [
+  # link using the memory.x
+  "-C", "link-arg=--nmagic",
+  "-C", "link-arg=-Tlink.x",
+
+  # reduce code size
+  "-Z", "trap-unreachable=no",
+  "-C", "inline-threshold=5",
+  "-C", "no-vectorize-loops",
+]
+
+[build]
+target = "thumbv6m-none-eabi"
