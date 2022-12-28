@@ -23,8 +23,8 @@ mod app {
     use fugit::{ExtU32, RateExtU32};
     use keyberon::{
         debounce::Debouncer,
-        key_code::{KbHidReport, KeyCode},
-        layout::{self, Layout},
+        key_code::KbHidReport,
+        layout::{CustomEvent, Event as LayoutEvent, Layout},
         matrix::Matrix,
     };
     use rp2040_hal::{
@@ -60,7 +60,7 @@ mod app {
         config,
         encoder::{Direction, RotaryEncoder},
         images,
-        layout::{CustomActions, LAYERS},
+        layout::{self, CustomActions, LAYERS},
         messages::{Codable, Message},
         Side,
     };
@@ -430,11 +430,8 @@ mod app {
         let mut had_event = false;
 
         // handle custom events
-        if let layout::CustomEvent::Press(event) = c.shared.layout.lock(|l| l.tick()) {
-            match event {
-                CustomActions::Uf2 => rp2040_hal::rom_data::reset_to_usb_boot(0, 0),
-                CustomActions::TogRGB => toggle_underglow::spawn().unwrap(),
-            }
+        if let CustomEvent::Press(event) = c.shared.layout.lock(|l| l.tick()) {
+            layout::handle_custom_action(*event);
             had_event = true;
         };
 
@@ -462,19 +459,11 @@ mod app {
 
         // handle encoder
         if let Some(dir) = c.shared.this_encoder_dir.lock(|e| e.take()) {
-            match dir {
-                Direction::Clockwise => report.pressed(KeyCode::VolUp),
-                Direction::CounterClockwise => report.pressed(KeyCode::VolDown),
-            }
+            layout::handle_encoder(config::MAIN_SIDE, dir, current_layer, &mut report);
             had_event = true;
         }
         if let Some(dir) = c.shared.other_encoder_dir.lock(|e| e.take()) {
-            let up = dir == Direction::Clockwise;
-            if current_layer == 3 {
-                shift_bright::spawn(up).unwrap()
-            } else {
-                shift_hue::spawn(up).unwrap()
-            }
+            layout::handle_encoder(config::MAIN_SIDE.other(), dir, current_layer, &mut report);
             had_event = true;
         }
 
@@ -542,7 +531,7 @@ mod app {
 
     /// Register a key event with the layout to be later processed
     #[task(priority=1, capacity=8, shared=[layout])]
-    fn register_keyboard_event(mut c: register_keyboard_event::Context, event: layout::Event) {
+    fn register_keyboard_event(mut c: register_keyboard_event::Context, event: LayoutEvent) {
         c.shared.layout.lock(|l| l.event(event));
     }
 
@@ -638,4 +627,13 @@ mod app {
 pub enum Side {
     Left,
     Right,
+}
+
+impl Side {
+    const fn other(&self) -> Side {
+        match self {
+            Side::Left => Side::Right,
+            Side::Right => Side::Left,
+        }
+    }
 }

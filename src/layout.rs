@@ -1,5 +1,10 @@
 use keyberon::action::Action;
+use keyberon::key_code::{KbHidReport, KeyCode};
 use keyberon::layout::{layout, Layers};
+
+use crate::app;
+use crate::encoder::Direction;
+use crate::Side;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum CustomActions {
@@ -41,3 +46,29 @@ pub static LAYERS: Layers<12, 5, 4, CustomActions> = layout! {
         [n        t        t        t        t        t            t        t        t        t        t        n]
     }
 };
+
+#[inline(always)]
+pub fn handle_encoder(side: Side, dir: Direction, layer: usize, report: &mut KbHidReport) {
+    match side {
+        Side::Left => match dir {
+            Direction::Clockwise => report.pressed(KeyCode::VolUp),
+            Direction::CounterClockwise => report.pressed(KeyCode::VolDown),
+        },
+        Side::Right => {
+            let up = dir == Direction::Clockwise;
+            if layer == 3 {
+                app::shift_bright::spawn(up).unwrap()
+            } else {
+                app::shift_hue::spawn(up).unwrap()
+            }
+        }
+    }
+}
+
+#[inline(always)]
+pub fn handle_custom_action(action: CustomActions) {
+    match action {
+        CustomActions::Uf2 => rp2040_hal::rom_data::reset_to_usb_boot(0, 0),
+        CustomActions::TogRGB => app::toggle_underglow::spawn().unwrap(),
+    }
+}

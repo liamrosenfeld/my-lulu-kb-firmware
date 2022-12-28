@@ -1,5 +1,5 @@
-use smart_leds::hsv::Hsv;
 use crate::Side;
+use smart_leds::hsv::Hsv;
 
 pub const MAIN_SIDE: Side = Side::Left;
 
