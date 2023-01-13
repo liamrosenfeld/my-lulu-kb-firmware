@@ -94,18 +94,20 @@ mod app {
         layer: usize,
         #[lock_free]
         is_main: bool,
+        #[lock_free]
+        scan_alarm: Alarm0,
+        #[lock_free]
+        watchdog: Watchdog,
     }
 
     #[local]
     struct Local {
         matrix: Matrix<DynPin, DynPin, 6, 5>,
         debouncer: Debouncer<[[bool; 6]; 5]>,
-        scan_alarm: Alarm0,
         underglow: Ws2812Pio<PIO0, SM0, bank0::Gpio29>,
         display: Ssd1306<DisplayI2C, DisplaySize128x32, BasicMode>,
         encoder: RotaryEncoder,
         start_alarm: Alarm2,
-        watchdog: Watchdog,
     }
 
     #[init]
@@ -151,13 +153,12 @@ mod app {
             .tx(pins.gpio0.into_mode())
             .rx(pins.gpio1.into_mode());
 
-        let mut uart = UartPeripheral::new(c.device.UART0, uart_pins, &mut resets)
+        let uart = UartPeripheral::new(c.device.UART0, uart_pins, &mut resets)
             .enable(
-                UartConfig::new(9600u32.Hz(), DataBits::Eight, None, StopBits::One),
+                UartConfig::new(9600.Hz(), DataBits::Eight, None, StopBits::One),
                 clocks.peripheral_clock.freq(),
             )
             .unwrap();
-        uart.enable_rx_interrupt();
 
         // ---- event handling stuff ----
         let matrix = Matrix::new(
@@ -193,9 +194,6 @@ mod app {
 
         let mut start_alarm = timer.alarm_2().unwrap();
         start_alarm.enable_interrupt();
-
-        // start alarms
-        scan_alarm.schedule(config::SCAN_TIME_US.micros()).unwrap();
         start_alarm.schedule(1.secs()).unwrap();
 
         // ---- set up usb ----
@@ -248,9 +246,6 @@ mod app {
             pins.gpio9.into_pull_up_input(),
         );
 
-        // ---- start watchdog ----
-        watchdog.start(config::WATCHDOG_MS.millis());
-
         // ---- set up state ---
         (
             Shared {
@@ -266,16 +261,16 @@ mod app {
                 sleep_alarm,
                 layer: 0,
                 is_main: false,
+                scan_alarm,
+                watchdog,
             },
             Local {
-                scan_alarm,
                 matrix,
                 debouncer,
                 underglow,
                 display,
                 encoder,
                 start_alarm,
-                watchdog,
             },
             init::Monotonics(),
         )
@@ -285,17 +280,17 @@ mod app {
     #[task(
         binds = TIMER_IRQ_0,
         priority = 1,
-        shared = [uart, layout, usb_device, this_encoder_dir, is_main],
-        local = [matrix, debouncer, scan_alarm, encoder, watchdog],
+        shared = [uart, layout, usb_device, this_encoder_dir, is_main, scan_alarm, watchdog],
+        local = [matrix, debouncer, encoder],
     )]
     fn scan(mut c: scan::Context) {
         // schedule the next scan
-        let scan_alarm = c.local.scan_alarm;
+        let scan_alarm = c.shared.scan_alarm;
         scan_alarm.clear_interrupt();
         scan_alarm.schedule(config::SCAN_TIME_US.micros()).unwrap();
 
         // feed watchdog so it knows this did not freeze
-        c.local.watchdog.feed();
+        c.shared.watchdog.feed();
 
         // get keys pressed
         let keys_pressed = c.local.matrix.get().unwrap();
@@ -341,9 +336,9 @@ mod app {
     #[task(
         binds = TIMER_IRQ_2,
         priority = 1,
-        shared = [is_main, usb_device, sleep_alarm],
-        local = [start_alarm])
-    ]
+        shared = [is_main, usb_device, sleep_alarm, uart, scan_alarm, watchdog],
+        local = [start_alarm]
+    )]
     fn startup(mut c: startup::Context) {
         c.local.start_alarm.clear_interrupt();
 
@@ -352,13 +347,55 @@ mod app {
             .shared
             .usb_device
             .lock(|d| d.state() == UsbDeviceState::Configured);
+        
+        // if not main, keep checking if main until confirming the other side is main
+        // prevents timing issues causing two secondary sides
+        if !is_main {
+            // read and then write so the other half has time to respond during the start_alarm
+            let is_other_main: bool = c.shared.uart.lock (|u| {
+                if u.uart_is_readable() {
+                    // decode
+                    let mut buff = [0u8; 2];
+                    let Ok(()) = u.read_full_blocking(&mut buff) else {
+                        return false;
+                    };
+                    let msg = Message::deserialize(buff);
+
+                    // handle
+                    if let Some(Message::AnswerMain) = msg {
+                        return true;
+                    }
+                }
+                false
+            });
+
+            if !is_other_main {
+                c.shared.uart.lock (|u| {
+                    if u.uart_is_writable() {
+                        u.write_full_blocking(&Message::QueryMain.serialize());
+                    }
+                });
+
+                c.local.start_alarm.schedule(100.millis()).unwrap();
+                return;
+            }
+        }
+
+        // set is_main after confirming
         *c.shared.is_main = is_main;
 
-        // set to default
+        // start scan and watchdog
+        c.shared.scan_alarm.schedule(config::SCAN_TIME_US.micros()).unwrap();
+        c.shared.watchdog.start(config::WATCHDOG_MS.millis());
+
+        // since manual uart reading is over, enable interrupts to enable read_msg
+        c.shared.uart.lock(|u| u.enable_rx_interrupt());
+
+        // set to default appearance
         update_display::spawn().unwrap();
         update_underglow::spawn().unwrap();
 
-        // sleep managed my main side
+        // sleep managed by main side
         if is_main {
             c.shared
                 .sleep_alarm
@@ -371,8 +408,8 @@ mod app {
     #[task(
         binds = UART0_IRQ,
         priority = 3,
-        shared = [uart, other_encoder_dir, awake, underglow_state, underglow_color])
-    ]
+        shared = [uart, other_encoder_dir, awake, underglow_state, underglow_color]
+    )]
     fn read_msg(mut c: read_msg::Context) {
         if c.shared.uart.lock(|u| u.uart_is_readable()) {
             // decode message
@@ -380,7 +417,7 @@ mod app {
             let Ok(()) = c.shared.uart.lock(|u| u.read_full_blocking(&mut buff)) else {
                 return;
             };
-            let msg = Message::deserialize(buff);
+            let Some(msg) = Message::deserialize(buff) else { return };
 
             // execute
             match msg {
@@ -408,8 +445,20 @@ mod app {
                     c.shared.awake.lock(|a| *a = state);
                     update_underglow::spawn().unwrap();
                     update_display::spawn().unwrap();
-                }
+                },
+                Message::QueryMain => {
+                    // discard capacity error because we only need to send one of these total
+                    let _ = answer_if_main::spawn();
+                },
+                Message::AnswerMain => { },
             };
+        }
+    }
+
+    #[task(priority = 1, shared = [is_main])]
+    fn answer_if_main(c: answer_if_main::Context) {
+        if *c.shared.is_main {
+            let _ = send_msg::spawn(Message::AnswerMain);
         }
     }
 
