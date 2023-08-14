@@ -28,22 +28,22 @@ pub static LAYERS: Layers<12, 5, 4, CustomActions> = layout! {
         [n        n        n        n        n        n            n        n        n        n        n        n],
         [n        n      Bslash     ^        &        n            n       '{'      '}'       n        n        n],
         [BSpace   !        @        #        $        %            n       '('      ')'       <        >        n],
-        [n        n      Grave      |        ~        n            n       '['      ']'       n        n        n],
-        [n        t        t        t        t        t            t        t        t        t        t        n]
+        [LShift   n      Grave      |        ~        n            n       '['      ']'       n        n        n],
+        [n       LCtrl    LAlt    LGui     Enter      t            t        t        t        t        t        n]
     }
     {
         [n        n        n        n        n        n            n        n        n        n        n        n],
         [n        n        7        8        9        -            n    CapsLock     n        n        n        n],
         [BSpace   0        4        5        6        +            n      Left      Down      Up     Right      n],
-        [n        n        1        2        3        E            n        n        n        n        n        n],
-        [n        t        t        t        t        t            t        t        t        t        t        n]
+        [LShift   n        1        2        3        E            n        n        n        n        n        n],
+        [n       LCtrl    LAlt    LGui     Enter      t            t        t        t        t        t        n]
     }
     {
         [n        n        n        n        n        n            n        n        n        n        n    {UF2}],
         [n        F1       F2       F3       F4       n            n        n        n        n        n        n],
-        [n        F5       F6       F7       F7       n            n        n        n        n        n        n],
-        [n        F8      F10      F11      F12       n            n        n        n        n        n        n],
-        [n        t        t        t        t        t            t        t        t        t        t        n]
+        [BSpace   F5       F6       F7       F7       n            n        n        n        n        n        n],
+        [LShift   F8       F10      F11      F12      n            n        n        n        n        n        n],
+        [n       LCtrl    LAlt    LGui     Enter      t            t        t        t        t        t        n]
     }
 };
 
