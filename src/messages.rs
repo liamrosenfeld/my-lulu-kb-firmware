@@ -38,7 +38,9 @@ impl Codable<[u8; 2]> for Message {
 
     fn deserialize(data: [u8; 2]) -> Option<Self> {
         match data[0] {
-            1 => Some(Self::KeyEvent(keyberon::layout::Event::deserialize(data[1]).unwrap())),
+            1 => Some(Self::KeyEvent(
+                keyberon::layout::Event::deserialize(data[1]).unwrap(),
+            )),
             2 => {
                 let dir = if data[1] != 0 {
                     Direction::Clockwise
@@ -46,7 +48,7 @@ impl Codable<[u8; 2]> for Message {
                     Direction::CounterClockwise
                 };
                 Some(Self::EncoderMoved(dir))
-            },
+            }
             3 => Some(Self::RgbState(data[1] != 0)),
             4 => Some(Self::RgbHue(data[1])),
             5 => Some(Self::RgbBright(data[1])),

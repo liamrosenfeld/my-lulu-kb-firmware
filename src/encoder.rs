@@ -1,6 +1,6 @@
 use core::option::Option;
 use embedded_hal::digital::v2::InputPin;
-use rp2040_hal::gpio::{bank0, Pin, PullUpInput};
+use rp2040_hal::gpio::{bank0, FunctionSio, Pin, PullUp, SioInput};
 
 #[derive(PartialEq)]
 pub enum Direction {
@@ -20,17 +20,17 @@ impl TryFrom<u8> for Direction {
     type Error = ();
 }
 
+type RotaryEncoderPinA = Pin<bank0::Gpio8, FunctionSio<SioInput>, PullUp>;
+type RotaryEncoderPinB = Pin<bank0::Gpio9, FunctionSio<SioInput>, PullUp>;
+
 pub struct RotaryEncoder {
-    pin_a: Pin<bank0::Gpio8, PullUpInput>,
-    pin_b: Pin<bank0::Gpio9, PullUpInput>,
+    pin_a: RotaryEncoderPinA,
+    pin_b: RotaryEncoderPinB,
     state: u8,
 }
 
 impl RotaryEncoder {
-    pub fn new(
-        pin_a: Pin<bank0::Gpio8, PullUpInput>,
-        pin_b: Pin<bank0::Gpio9, PullUpInput>,
-    ) -> Self {
+    pub fn new(pin_a: RotaryEncoderPinA, pin_b: RotaryEncoderPinB) -> Self {
         Self {
             pin_a,
             pin_b,

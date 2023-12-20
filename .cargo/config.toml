@@ -1,6 +1,6 @@
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
 # have cargo run flash the board
-runner = "elf2uf2-rs -d"
+runner = "elf2uf2-rs"
 
 rustflags = [
   # link using the memory.x

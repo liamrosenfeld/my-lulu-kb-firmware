@@ -29,11 +29,15 @@ mod app {
     };
     use rp2040_hal::{
         clocks::{init_clocks_and_plls, Clock},
-        gpio::{self, bank0, DynPin, FunctionUart, Pin, Pins},
+        gpio::{
+            bank0, DynPinId, FunctionI2C, FunctionPio0, FunctionSio, FunctionUart, Pin, Pins,
+            PullDown, PullUp, SioInput, SioOutput,
+        },
         pac::UART0,
         pac::{I2C1, PIO0},
         pio::{PIOExt, SM0},
         timer::{Alarm, Alarm0, Alarm1, Alarm2, Timer},
+        typelevel::{OptionTNone, OptionTSome},
         uart::{self, DataBits, Enabled, StopBits, UartConfig, UartPeripheral},
         usb::UsbBus,
         Sio, Watchdog, I2C,
@@ -54,7 +58,7 @@ mod app {
         device::{UsbDevice, UsbDeviceState},
         prelude::{UsbDeviceBuilder, UsbVidPid},
     };
-    use ws2812_pio::Ws2812Direct as Ws2812Pio;
+    use ws2812_pio::Ws2812Direct;
 
     use crate::{
         config,
@@ -65,14 +69,16 @@ mod app {
         Side,
     };
 
+    type Tx = Pin<bank0::Gpio0, FunctionUart, PullDown>;
+    type Rx = Pin<bank0::Gpio1, FunctionUart, PullDown>;
     type UartPeriph = UartPeripheral<
         Enabled,
         UART0,
-        uart::Pins<Pin<bank0::Gpio0, FunctionUart>, Pin<bank0::Gpio1, FunctionUart>, (), ()>,
+        uart::Pins<OptionTSome<Tx>, OptionTSome<Rx>, OptionTNone, OptionTNone>,
     >;
 
-    type Sda = Pin<bank0::Gpio22, gpio::Function<gpio::I2C>>;
-    type Scl = Pin<bank0::Gpio23, gpio::Function<gpio::I2C>>;
+    type Sda = Pin<bank0::Gpio22, FunctionI2C, PullUp>;
+    type Scl = Pin<bank0::Gpio23, FunctionI2C, PullUp>;
     type DisplayI2C = I2CInterface<I2C<I2C1, (Sda, Scl)>>;
 
     const CLOCK_FREQ_HZ: u32 = 12_000_000;
@@ -100,11 +106,14 @@ mod app {
         watchdog: Watchdog,
     }
 
+    type ColPin = Pin<DynPinId, FunctionSio<SioInput>, PullUp>;
+    type RowPin = Pin<DynPinId, FunctionSio<SioOutput>, PullDown>;
+
     #[local]
     struct Local {
-        matrix: Matrix<DynPin, DynPin, 6, 5>,
+        matrix: Matrix<ColPin, RowPin, 6, 5>,
         debouncer: Debouncer<[[bool; 6]; 5]>,
-        underglow: Ws2812Pio<PIO0, SM0, bank0::Gpio29>,
+        underglow: Ws2812Direct<PIO0, SM0, Pin<bank0::Gpio29, FunctionPio0, PullDown>>,
         display: Ssd1306<DisplayI2C, DisplaySize128x32, BasicMode>,
         encoder: RotaryEncoder,
         start_alarm: Alarm2,
@@ -144,14 +153,12 @@ mod app {
         );
 
         // ---- delay for power on ----
-        for _ in 0..1000 {
-            cortex_m::asm::nop();
-        }
+        cortex_m::asm::delay(1000);
 
         // ---- set up uart ----
         let uart_pins = uart::Pins::default()
-            .tx(pins.gpio0.into_mode())
-            .rx(pins.gpio1.into_mode());
+            .tx(pins.gpio0.into_function())
+            .rx(pins.gpio1.into_function());
 
         let uart = UartPeripheral::new(c.device.UART0, uart_pins, &mut resets)
             .enable(
@@ -163,19 +170,19 @@ mod app {
         // ---- event handling stuff ----
         let matrix = Matrix::new(
             [
-                pins.gpio2.into_pull_up_input().into(),
-                pins.gpio3.into_pull_up_input().into(),
-                pins.gpio4.into_pull_up_input().into(),
-                pins.gpio5.into_pull_up_input().into(),
-                pins.gpio6.into_pull_up_input().into(),
-                pins.gpio7.into_pull_up_input().into(),
+                pins.gpio2.into_pull_up_input().into_dyn_pin(),
+                pins.gpio3.into_pull_up_input().into_dyn_pin(),
+                pins.gpio4.into_pull_up_input().into_dyn_pin(),
+                pins.gpio5.into_pull_up_input().into_dyn_pin(),
+                pins.gpio6.into_pull_up_input().into_dyn_pin(),
+                pins.gpio7.into_pull_up_input().into_dyn_pin(),
             ],
             [
-                pins.gpio14.into_push_pull_output().into(),
-                pins.gpio15.into_push_pull_output().into(),
-                pins.gpio16.into_push_pull_output().into(),
-                pins.gpio17.into_push_pull_output().into(),
-                pins.gpio18.into_push_pull_output().into(),
+                pins.gpio14.into_push_pull_output().into_dyn_pin(),
+                pins.gpio15.into_push_pull_output().into_dyn_pin(),
+                pins.gpio16.into_push_pull_output().into_dyn_pin(),
+                pins.gpio17.into_push_pull_output().into_dyn_pin(),
+                pins.gpio18.into_push_pull_output().into_dyn_pin(),
             ],
         )
         .unwrap();
@@ -184,7 +191,7 @@ mod app {
         let debouncer = Debouncer::new([[false; 6]; 5], [[false; 6]; 5], config::DEBOUNCE_SCANS);
 
         // ---- create alarms ----
-        let mut timer = Timer::new(c.device.TIMER, &mut resets);
+        let mut timer = Timer::new(c.device.TIMER, &mut resets, &clocks);
 
         let mut scan_alarm = timer.alarm_0().unwrap();
         scan_alarm.enable_interrupt();
@@ -219,18 +226,20 @@ mod app {
 
         // ---- set up underglow ----
         let (mut pio, sm0, _, _, _) = c.device.PIO0.split(&mut resets);
-        let underglow = Ws2812Pio::new(
-            pins.gpio29.into_mode(),
+        let underglow = Ws2812Direct::new(
+            pins.gpio29.into_function(),
             &mut pio,
             sm0,
             clocks.peripheral_clock.freq(),
         );
 
         // ---- set up display ----
+        let sda_pin: Pin<_, FunctionI2C, PullUp> = pins.gpio22.reconfigure();
+        let scl_pin: Pin<_, FunctionI2C, PullUp> = pins.gpio23.reconfigure();
         let i2c = I2C::i2c1(
             c.device.I2C1,
-            pins.gpio22.into_mode(),
-            pins.gpio23.into_mode(),
+            sda_pin,
+            scl_pin,
             400.kHz(),
             &mut resets,
             clocks.system_clock.freq(),
@@ -293,7 +302,11 @@ mod app {
         c.shared.watchdog.feed();
 
         // get keys pressed
-        let keys_pressed = c.local.matrix.get().unwrap();
+        let keys_pressed = c
+            .local
+            .matrix
+            .get_with_delay(|| cortex_m::asm::delay(100))
+            .unwrap();
         let events = c.local.debouncer.events(keys_pressed);
 
         if *c.shared.is_main {
@@ -347,12 +360,12 @@ mod app {
             .shared
             .usb_device
             .lock(|d| d.state() == UsbDeviceState::Configured);
-        
+
         // if not main, keep checking if main until confirming the other side is main
         // prevents timing issues causing two secondary sides
         if !is_main {
             // read and then write so the other half has time to respond during the start_alarm
-            let is_other_main: bool = c.shared.uart.lock (|u| {
+            let is_other_main: bool = c.shared.uart.lock(|u| {
                 if u.uart_is_readable() {
                     // decode
                     let mut buff = [0u8; 2];
@@ -370,7 +383,7 @@ mod app {
             });
 
             if !is_other_main {
-                c.shared.uart.lock (|u| {
+                c.shared.uart.lock(|u| {
                     if u.uart_is_writable() {
                         u.write_full_blocking(&Message::QueryMain.serialize());
                     }
@@ -385,7 +398,10 @@ mod app {
         *c.shared.is_main = is_main;
 
         // start scan and watchdog
-        c.shared.scan_alarm.schedule(config::SCAN_TIME_US.micros()).unwrap();
+        c.shared
+            .scan_alarm
+            .schedule(config::SCAN_TIME_US.micros())
+            .unwrap();
         c.shared.watchdog.start(config::WATCHDOG_MS.millis());
 
         // since manual uart reading is over, enable interrupts to enable read_msg
@@ -417,7 +433,9 @@ mod app {
             let Ok(()) = c.shared.uart.lock(|u| u.read_full_blocking(&mut buff)) else {
                 return;
             };
-            let Some(msg) = Message::deserialize(buff) else { return };
+            let Some(msg) = Message::deserialize(buff) else {
+                return;
+            };
 
             // execute
             match msg {
@@ -445,12 +463,12 @@ mod app {
                     c.shared.awake.lock(|a| *a = state);
                     update_underglow::spawn().unwrap();
                     update_display::spawn().unwrap();
-                },
+                }
                 Message::QueryMain => {
                     // discard capacity error because we only need to send one of these total
                     let _ = answer_if_main::spawn();
-                },
-                Message::AnswerMain => { },
+                }
+                Message::AnswerMain => {}
             };
         }
     }
