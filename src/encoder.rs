@@ -1,4 +1,3 @@
-use core::option::Option;
 use embedded_hal::digital::v2::InputPin;
 use rp2040_hal::gpio::{bank0, FunctionSio, Pin, PullUp, SioInput};
 

@@ -10,10 +10,12 @@ use crate::Side;
 pub enum CustomActions {
     Uf2,
     TogRGB,
+    TogWinMode,
 }
 
 const UF2: Action<CustomActions> = Action::Custom(CustomActions::Uf2);
 const TOG_RGB: Action<CustomActions> = Action::Custom(CustomActions::TogRGB);
+const TOG_WIN: Action<CustomActions> = Action::Custom(CustomActions::TogWinMode);
 
 #[rustfmt::skip]
 pub static LAYERS: Layers<12, 5, 4, CustomActions> = layout! {
@@ -40,7 +42,7 @@ pub static LAYERS: Layers<12, 5, 4, CustomActions> = layout! {
     }
     {
         [n        n        n        n        n        n            n        n        n        n        n    {UF2}],
-        [n        F1       F2       F3       F4       n            n        n        n        n        n        n],
+        [Delete   F1       F2       F3       F4       n            n    {TOG_WIN}    n        n        n        n],
         [BSpace   F5       F6       F7       F7       n            n        n        n        n        n        n],
         [LShift   F8       F10      F11      F12      n            n        n        n        n        n        n],
         [n       LCtrl    LAlt    LGui     Enter      t            t        t        t        t        t        n]
@@ -70,5 +72,6 @@ pub fn handle_custom_action(action: CustomActions) {
     match action {
         CustomActions::Uf2 => rp2040_hal::rom_data::reset_to_usb_boot(0, 0),
         CustomActions::TogRGB => app::toggle_underglow::spawn().unwrap(),
+        CustomActions::TogWinMode => app::toggle_windows_mode::spawn().unwrap(),
     }
 }

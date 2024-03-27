@@ -98,6 +98,7 @@ mod app {
         awake: bool,
         sleep_alarm: Alarm1,
         layer: usize,
+        windows_mode: bool,
         #[lock_free]
         is_main: bool,
         #[lock_free]
@@ -269,6 +270,7 @@ mod app {
                 awake: true,
                 sleep_alarm,
                 layer: 0,
+                windows_mode: false,
                 is_main: false,
                 scan_alarm,
                 watchdog,
@@ -289,7 +291,7 @@ mod app {
     #[task(
         binds = TIMER_IRQ_0,
         priority = 1,
-        shared = [uart, layout, usb_device, this_encoder_dir, is_main, scan_alarm, watchdog],
+        shared = [uart, layout, usb_device, this_encoder_dir, is_main, windows_mode, scan_alarm, watchdog],
         local = [matrix, debouncer, encoder],
     )]
     fn scan(mut c: scan::Context) {
@@ -311,12 +313,23 @@ mod app {
 
         if *c.shared.is_main {
             // register the key-presses with the layout
+            let windows_mode = c.shared.windows_mode.lock(|w| *w);
             c.shared.layout.lock(|l| {
                 for mut event in events {
                     // mirror main side events if main side is the right
                     if config::MAIN_SIDE == Side::Right {
                         event = event.transform(|i, j| (i, 11 - j));
                     }
+
+                    // if windows mode, swap command and control
+                    if windows_mode {
+                        match event.coord() {
+                            (4, 3) => event = event.transform(|_, _| (4, 1)),
+                            (4, 1) => event = event.transform(|_, _| (4, 3)),
+                            _ => {}
+                        }
+                    }
+
                     l.event(event)
                 }
             });
@@ -424,7 +437,7 @@ mod app {
     #[task(
         binds = UART0_IRQ,
         priority = 3,
-        shared = [uart, other_encoder_dir, awake, underglow_state, underglow_color]
+        shared = [uart, other_encoder_dir, awake, underglow_state, underglow_color, windows_mode]
     )]
     fn read_msg(mut c: read_msg::Context) {
         if c.shared.uart.lock(|u| u.uart_is_readable()) {
@@ -462,6 +475,10 @@ mod app {
                 Message::Awake(state) => {
                     c.shared.awake.lock(|a| *a = state);
                     update_underglow::spawn().unwrap();
+                    update_display::spawn().unwrap();
+                }
+                Message::SetWindows(state) => {
+                    c.shared.windows_mode.lock(|w| *w = state);
                     update_display::spawn().unwrap();
                 }
                 Message::QueryMain => {
@@ -594,6 +611,15 @@ mod app {
         let _ = send_msg::spawn(Message::Awake(false));
     }
 
+    #[task(priority = 1, shared = [windows_mode])]
+    fn toggle_windows_mode(mut c: toggle_windows_mode::Context) {
+        let new_state = c.shared.windows_mode.lock(|w| {
+            *w = !*w;
+            *w
+        });
+        let _ = send_msg::spawn(Message::SetWindows(new_state));
+    }
+
     /* ----------------------------- secondary side ----------------------------- */
 
     /// Register a key event with the layout to be later processed
@@ -663,7 +689,7 @@ mod app {
     }
 
     /* --------------------------------- display -------------------------------- */
-    #[task(priority = 1, shared = [is_main, layer, awake], local = [display])]
+    #[task(priority = 1, shared = [is_main, layer, awake, windows_mode], local = [display])]
     fn update_display(mut c: update_display::Context) {
         // toggle display depending on asleep or not
         if c.shared.awake.lock(|a| *a) {
@@ -684,7 +710,12 @@ mod app {
                 _ => images::LOGO,
             }
         } else {
-            images::LOGO
+            let windows_mode = c.shared.windows_mode.lock(|w| *w);
+            if windows_mode {
+                images::WINDOWS_MODE
+            } else {
+                images::LOGO
+            }
         };
         c.local.display.draw(data).unwrap();
     }

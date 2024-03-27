@@ -15,6 +15,7 @@ pub enum Message {
     RgbHue(u8),
     RgbBright(u8),
     Awake(bool),
+    SetWindows(bool),
 
     // Startup
     QueryMain,
@@ -31,8 +32,9 @@ impl Codable<[u8; 2]> for Message {
             Self::RgbHue(hue) => [4, *hue],
             Self::RgbBright(bright) => [5, *bright],
             Self::Awake(state) => [6, *state as u8],
-            Self::QueryMain => [7, 0],
-            Self::AnswerMain => [8, 0],
+            Self::SetWindows(state) => [7, *state as u8],
+            Self::QueryMain => [8, 0],
+            Self::AnswerMain => [9, 0],
         }
     }
 
@@ -53,8 +55,9 @@ impl Codable<[u8; 2]> for Message {
             4 => Some(Self::RgbHue(data[1])),
             5 => Some(Self::RgbBright(data[1])),
             6 => Some(Self::Awake(data[1] != 0)),
-            7 => Some(Self::QueryMain),
-            8 => Some(Self::AnswerMain),
+            7 => Some(Self::SetWindows(data[1] != 0)),
+            8 => Some(Self::QueryMain),
+            9 => Some(Self::AnswerMain),
             _ => None,
         }
     }
