@@ -1,4 +1,4 @@
-use embedded_hal::digital::v2::InputPin;
+use embedded_hal::digital::InputPin;
 use rp2040_hal::gpio::{bank0, FunctionSio, Pin, PullUp, SioInput};
 
 #[derive(PartialEq)]

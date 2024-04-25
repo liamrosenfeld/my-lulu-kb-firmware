@@ -55,7 +55,7 @@ mod app {
     };
     use usb_device::{
         class_prelude::{UsbBusAllocator, UsbClass},
-        device::{UsbDevice, UsbDeviceState},
+        device::{StringDescriptors, UsbDevice, UsbDeviceState},
         prelude::{UsbDeviceBuilder, UsbVidPid},
     };
     use ws2812_pio::Ws2812Direct;
@@ -220,9 +220,12 @@ mod app {
             unsafe { USB_BUS.as_ref().unwrap() },
             UsbVidPid(0x16c0, 0x27db),
         )
-        .manufacturer("Boardsource")
-        .product("Lulu")
-        .serial_number("42")
+        .strings(&[StringDescriptors::default()
+            .manufacturer("Boardsource")
+            .product("Lulu")
+            .serial_number("42")
+        ])
+        .unwrap()
         .build();
 
         // ---- set up underglow ----
