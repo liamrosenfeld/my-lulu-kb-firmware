@@ -65,8 +65,8 @@ mod app {
         encoder::{Direction, RotaryEncoder},
         images,
         layout::{self, CustomActions, LAYERS},
-        messages::{Codable, Message},
-        Side,
+        messages::{Codable, Message, Modes},
+        LedHandler, Side,
     };
 
     type Tx = Pin<bank0::Gpio0, FunctionUart, PullDown>;
@@ -88,7 +88,8 @@ mod app {
     #[shared]
     struct Shared {
         usb_device: UsbDevice<'static, UsbBus>,
-        usb_class: keyberon::hid::HidClass<'static, UsbBus, keyberon::keyboard::Keyboard<()>>,
+        usb_class:
+            keyberon::hid::HidClass<'static, UsbBus, keyberon::keyboard::Keyboard<LedHandler>>,
         uart: UartPeriph,
         layout: Layout<12, 5, 4, CustomActions>,
         this_encoder_dir: Option<Direction>,
@@ -98,7 +99,7 @@ mod app {
         awake: bool,
         sleep_alarm: Alarm1,
         layer: usize,
-        windows_mode: bool,
+        modes: Modes,
         #[lock_free]
         is_main: bool,
         #[lock_free]
@@ -215,7 +216,8 @@ mod app {
         unsafe {
             USB_BUS = Some(usb_bus);
         }
-        let usb_class = keyberon::new_class(unsafe { USB_BUS.as_ref().unwrap() }, ());
+        let usb_class =
+            keyberon::new_class(unsafe { USB_BUS.as_ref().unwrap() }, LedHandler::new());
         let usb_device = UsbDeviceBuilder::new(
             unsafe { USB_BUS.as_ref().unwrap() },
             UsbVidPid(0x16c0, 0x27db),
@@ -223,8 +225,7 @@ mod app {
         .strings(&[StringDescriptors::default()
             .manufacturer("Boardsource")
             .product("Lulu")
-            .serial_number("42")
-        ])
+            .serial_number("42")])
         .unwrap()
         .build();
 
@@ -273,7 +274,7 @@ mod app {
                 awake: true,
                 sleep_alarm,
                 layer: 0,
-                windows_mode: false,
+                modes: Modes::new(),
                 is_main: false,
                 scan_alarm,
                 watchdog,
@@ -294,7 +295,7 @@ mod app {
     #[task(
         binds = TIMER_IRQ_0,
         priority = 1,
-        shared = [uart, layout, usb_device, this_encoder_dir, is_main, windows_mode, scan_alarm, watchdog],
+        shared = [uart, layout, usb_device, this_encoder_dir, is_main, modes, scan_alarm, watchdog],
         local = [matrix, debouncer, encoder],
     )]
     fn scan(mut c: scan::Context) {
@@ -316,7 +317,7 @@ mod app {
 
         if *c.shared.is_main {
             // register the key-presses with the layout
-            let windows_mode = c.shared.windows_mode.lock(|w| *w);
+            let windows_mode = c.shared.modes.lock(|m| m.windows);
             c.shared.layout.lock(|l| {
                 for mut event in events {
                     // mirror main side events if main side is the right
@@ -440,7 +441,7 @@ mod app {
     #[task(
         binds = UART0_IRQ,
         priority = 3,
-        shared = [uart, other_encoder_dir, awake, underglow_state, underglow_color, windows_mode]
+        shared = [uart, other_encoder_dir, awake, underglow_state, underglow_color, modes]
     )]
     fn read_msg(mut c: read_msg::Context) {
         if c.shared.uart.lock(|u| u.uart_is_readable()) {
@@ -480,8 +481,8 @@ mod app {
                     update_underglow::spawn().unwrap();
                     update_display::spawn().unwrap();
                 }
-                Message::SetWindows(state) => {
-                    c.shared.windows_mode.lock(|w| *w = state);
+                Message::SetModes(modes) => {
+                    c.shared.modes.lock(|m| *m = modes);
                     update_display::spawn().unwrap();
                 }
                 Message::QueryMain => {
@@ -614,13 +615,29 @@ mod app {
         let _ = send_msg::spawn(Message::Awake(false));
     }
 
-    #[task(priority = 1, shared = [windows_mode])]
+    #[task(priority = 1, shared = [modes])]
     fn toggle_windows_mode(mut c: toggle_windows_mode::Context) {
-        let new_state = c.shared.windows_mode.lock(|w| {
-            *w = !*w;
-            *w
+        let new_state = c.shared.modes.lock(|m| {
+            m.windows = !m.windows;
+            *m
         });
-        let _ = send_msg::spawn(Message::SetWindows(new_state));
+        let _ = send_msg::spawn(Message::SetModes(new_state));
+    }
+
+    #[task(priority = 1, capacity=8, shared = [modes])]
+    fn set_caps_lock(mut c: set_caps_lock::Context, state: bool) {
+        let new_state = c.shared.modes.lock(|m| {
+            if state == m.caps_lock {
+                return None;
+            }
+
+            m.caps_lock = state;
+            Some(*m)
+        });
+
+        if let Some(new_state) = new_state {
+            let _ = send_msg::spawn(Message::SetModes(new_state));
+        }
     }
 
     /* ----------------------------- secondary side ----------------------------- */
@@ -692,7 +709,7 @@ mod app {
     }
 
     /* --------------------------------- display -------------------------------- */
-    #[task(priority = 1, shared = [is_main, layer, awake, windows_mode], local = [display])]
+    #[task(priority = 1, shared = [is_main, layer, awake, modes], local = [display])]
     fn update_display(mut c: update_display::Context) {
         // toggle display depending on asleep or not
         if c.shared.awake.lock(|a| *a) {
@@ -713,8 +730,10 @@ mod app {
                 _ => images::LOGO,
             }
         } else {
-            let windows_mode = c.shared.windows_mode.lock(|w| *w);
-            if windows_mode {
+            let modes = c.shared.modes.lock(|m| *m);
+            if modes.caps_lock {
+                images::CAPS_LOCK
+            } else if modes.windows {
                 images::WINDOWS_MODE
             } else {
                 images::LOGO
@@ -736,5 +755,19 @@ impl Side {
             Side::Left => Side::Right,
             Side::Right => Side::Left,
         }
+    }
+}
+
+pub struct LedHandler;
+
+impl LedHandler {
+    fn new() -> Self {
+        Self
+    }
+}
+
+impl keyberon::keyboard::Leds for LedHandler {
+    fn caps_lock(&mut self, state: bool) {
+        app::set_caps_lock::spawn(state).unwrap();
     }
 }

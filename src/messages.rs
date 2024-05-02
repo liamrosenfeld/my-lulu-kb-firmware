@@ -15,7 +15,7 @@ pub enum Message {
     RgbHue(u8),
     RgbBright(u8),
     Awake(bool),
-    SetWindows(bool),
+    SetModes(Modes),
 
     // Startup
     QueryMain,
@@ -32,7 +32,7 @@ impl Codable<[u8; 2]> for Message {
             Self::RgbHue(hue) => [4, *hue],
             Self::RgbBright(bright) => [5, *bright],
             Self::Awake(state) => [6, *state as u8],
-            Self::SetWindows(state) => [7, *state as u8],
+            Self::SetModes(modes) => [7, modes.serialize()],
             Self::QueryMain => [8, 0],
             Self::AnswerMain => [9, 0],
         }
@@ -55,7 +55,7 @@ impl Codable<[u8; 2]> for Message {
             4 => Some(Self::RgbHue(data[1])),
             5 => Some(Self::RgbBright(data[1])),
             6 => Some(Self::Awake(data[1] != 0)),
-            7 => Some(Self::SetWindows(data[1] != 0)),
+            7 => Some(Self::SetModes(Modes::deserialize(data[1]).unwrap())),
             8 => Some(Self::QueryMain),
             9 => Some(Self::AnswerMain),
             _ => None,
@@ -101,5 +101,35 @@ impl Codable<u8> for keyberon::layout::Event {
         } else {
             Some(Self::Press(i, j))
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Modes {
+    pub windows: bool,
+
+    // handled computer side, but this is a convenient place to track the led status for the display
+    pub caps_lock: bool,
+}
+
+impl Modes {
+    pub fn new() -> Self {
+        Self {
+            windows: false,
+            caps_lock: false,
+        }
+    }
+}
+
+impl Codable<u8> for Modes {
+    fn serialize(&self) -> u8 {
+        (self.windows as u8) | (self.caps_lock as u8) << 1
+    }
+
+    fn deserialize(data: u8) -> Option<Self> {
+        Some(Self {
+            windows: data & 1 != 0,
+            caps_lock: data & 1 << 1 != 0,
+        })
     }
 }
